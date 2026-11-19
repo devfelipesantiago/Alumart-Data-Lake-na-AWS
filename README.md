@@ -10,7 +10,7 @@ Separar dados operacionais, tratamento e consumo analítico. Clientes, produtos,
 
 ## Arquitetura
 
-![Arquitetura AWS](/AWS/arquiteturaAWS.png)
+![Arquitetura AWS](/arquiteturaAWS.png)
 
 Athena é a camada prevista de consulta ao catálogo. A consulta efetiva não foi confirmada no material analisado. O template não representa uma orquestração automática completa entre as três funções.
 
