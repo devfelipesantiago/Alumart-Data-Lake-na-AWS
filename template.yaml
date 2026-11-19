@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Alumart Data Lake - Bronze (RDS -> S3) e Silver (DQ + Parquet)
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 512
+    Runtime: python3.12
+
+Parameters:
+  SecretName:
+    Type: String
+    Default: "dev/alumart/database"
+  S3Bucket:
+    Type: String
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets privadas para a Lambda
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group da Lambda
+
+Resources:
+
+  # -----------------------------------------------------------------------------------
+  # Lambda Bronze (extração)
+  # -----------------------------------------------------------------------------------
+  LambdaExtract:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lambda_extract_bronze
+      CodeUri: lambda_extract/
+      Handler: lambda_function.handler
+      Environment:
+        Variables:
+          SECRET_NAME: !Ref SecretName
+          S3_BUCKET: !Ref S3Bucket
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref S3Bucket
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}-*"
+
+  # ------------------------------------------------------------------------------------
+  # Lambda Layer - pandas + pyarrow para a Lambda Silver
+  # ------------------------------------------------------------------------------------
+  PandasPyarrowLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: alumart-pandas-pyarrow
+      Description: pandas>2 e pyarrow>15 para transformações Silver
+      ContentUri: layers/pandas_pyarrow/
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+  # ------------------------------------------------------------------------------------
+  # Lambda Silver (transformação + DQ)
+  # ------------------------------------------------------------------------------------
+  LambdaTransformSilver:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lambda_transform_silver
+      CodeUri: lambda_transform_silver/
+      Handler: lambda_function.handler
+      MemorySize: 512
+      Timeout: 300
+      Layers:
+        - !Ref PandasPyarrowLayer
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3Bucket
+          GLUE_DATABASE: silver
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref S3Bucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:CreateTable
+                - glue:UpdateTable
+                - glue:GetPartition
+                - glue:CreatePartition
+                - glue:BatchCreatePartition
+                - glue:GetPartitions
+              Resource: "*"
+# Lambda Gold (star schema)
+  LambdaTransformGold:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lambda_transform_gold
+      CodeUri: lambda_transform_gold/
+      Handler: lambda_function.handler
+      MemorySize: 1024
+      Timeout: 300
+      Layers:
+        - !Ref PandasPyarrowLayer
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3Bucket
+          GLUE_DATABASE: gold
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref S3Bucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:CreateTable
+                - glue:UpdateTable
+                - glue:GetPartition
+                - glue:CreatePartition
+                - glue:BatchCreatePartition
+                - glue:GetPartitions
+              Resource: "*"
